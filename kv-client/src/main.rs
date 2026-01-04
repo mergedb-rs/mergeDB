@@ -1,6 +1,12 @@
+mod cli;
+mod display;
+
+use clap::Parser;
+use cli::{Cli, Commands};
+use colored::*;
 use communication::replication_service_client::ReplicationServiceClient;
 use communication::PropagateDataRequest;
-use std::io::Write;
+use std::io::stdin;
 use tonic::Request;
 
 pub mod communication {
@@ -9,108 +15,108 @@ pub mod communication {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut node_addr = String::new();
+    let cli = Cli::parse();
 
-    //this part will be handled by a load balancer
-    print!("enter node's address to connect to(egs: 127.0.0.1:8000): ");
-    std::io::stdout().flush().unwrap();
-    std::io::stdin().read_line(&mut node_addr)?;
-    let node_addr = String::from("http://") + node_addr.trim();
+    let addr = cli.addr.unwrap_or_else(|| "127.0.0.1:8000".to_string());
 
-    let mut client = ReplicationServiceClient::connect(node_addr.clone()).await?;
-    println!("connected to: {}", node_addr);
-    println!(
-        r#"
-                                     ______  ______
-                                    |  _  \ | ___ \
- _ __ ___    ___  _ __  __ _   ___  | | | | | |_/ /
-| '_ ` _ \  / _ \ | '__|/ _` | / _ \ | | | | | ___ \
-| | | | | ||  __/ | |  | (_| ||  __/ | |/ /  | |_/ /
-|_| |_| |_| \___| |_|   \__, | \___| |___/   \____/
-                         __/ |
-                        |___/
-    "#
-    );
+    let endpoint = format!("http://{}", addr);
+    let mut client = ReplicationServiceClient::connect(endpoint.clone()).await?;
 
+    match cli.command {
+        Some(Commands::Interactive) | None => {
+            display::show_welcome_screen_start();
+            run_interactive(client).await;
+        }
+
+        Some(Commands::Cset { key, value }) => {
+            send_request(&mut client, "CSET", &key, Some(value)).await?;
+        }
+
+        Some(Commands::Cget { key }) => {
+            send_request(&mut client, "CGET", &key, None).await?;
+        }
+
+        Some(Commands::Cinc { key, amount }) => {
+            send_request(&mut client, "CINC", &key, Some(amount)).await?;
+        }
+
+        Some(Commands::Cdec { key, amount }) => {
+            send_request(&mut client, "CDEC", &key, Some(amount)).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn send_request(
+    client: &mut ReplicationServiceClient<tonic::transport::Channel>,
+    cmd: &str,
+    key: &str,
+    value: Option<i64>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = value.map(|v| v.to_be_bytes().to_vec()).unwrap_or_default();
+
+    let request = Request::new(PropagateDataRequest {
+        valuetype: cmd.to_string(),
+        key: key.to_string(),
+        value: bytes,
+    });
+
+    let response = client.propagate_data(request).await?;
+
+    if cmd == "CGET" {
+        let raw = response.into_inner().response;
+        let val = i64::from_be_bytes(raw.try_into().unwrap_or([0; 8]));
+        println!("{}", format!(":: {}", val).cyan());
+    } else {
+        println!("{}", "✓ OK".green());
+    }
+
+    Ok(())
+}
+
+async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::Channel>) {
     loop {
-        let mut user_query = String::new();
+        crate::display::show_prompt();
 
-        print!(":: ");
-        std::io::stdout().flush().unwrap();
-
-        std::io::stdin()
-            .read_line(&mut user_query)
-            .expect("failed to read line");
-        let parts: Vec<&str> = user_query.split_whitespace().collect();
+        let mut input = String::new();
+        stdin().read_line(&mut input).unwrap();
+        let parts: Vec<&str> = input.split_whitespace().collect();
 
         if parts.is_empty() {
             continue;
         }
 
-        let cmd = parts[0];
-
-        if cmd == "HELP" {
-            println!("the following operations are possible as of now: ");
-            println!("CSET key value (e.g., CSET mykey 10)");
-            println!("CGET key");
-            println!("CINC key amt");
-            println!("CDEC key amt");
-            continue;
-        }
-
-        if parts.len() == 3 {
-            let value_type = String::from(parts[0]);
-            let key = String::from(parts[1]);
-            let val_str = parts[2];
-
-            if value_type.starts_with('C') {
-                let parsed_value = match val_str.parse::<i64>() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        println!("Error: Value must be an integer");
-                        continue;
-                    }
-                };
-
-                let request = Request::new(PropagateDataRequest {
-                    valuetype: value_type.clone(),
-                    key: key.clone(),
-                    value: parsed_value.to_be_bytes().to_vec(),
-                });
-
-                match client.propagate_data(request).await {
-                    Ok(response) => println!("response: {:?}", response.into_inner()),
-                    Err(e) => println!("RPC Failed: {}", e),
-                }
-            } else {
-                println!("not supported at the moment...");
+        match parts[0].to_uppercase().as_str() {
+            "HELP" => {
+                println!("{}", "Commands:".bold());
+                println!("  CSET <key> <value>");
+                println!("  CGET <key>");
+                println!("  CINC <key> <amount>");
+                println!("  CDEC <key> <amount>");
+                println!("  EXIT");
             }
-        } else if parts.len() == 2 {
-            let value_type = String::from(parts[0]);
-            let key = String::from(parts[1]);
 
-            if value_type == "CGET" {
-                let request = Request::new(PropagateDataRequest {
-                    valuetype: value_type.clone(),
-                    key: key.clone(),
-                    value: Vec::new(), //send empty bytes instead
-                });
+            "EXIT" | "QUIT" => {
+                println!("{}", "Goodbye!".blue().bold());
+                break;
+            }
 
-                match client.propagate_data(request).await {
-                    Ok(response) => {
-                        let resp_inner = response.into_inner().response;
+            "CGET" if parts.len() == 2 => {
+                let _ = send_request(&mut client, "CGET", parts[1], None).await;
+            }
 
-                        let bytes: [u8; 8] = resp_inner.try_into().unwrap_or([0; 8]);
-                        let val = i64::from_be_bytes(bytes);
-
-                        println!(":: {}", val);
-                    }
-                    Err(e) => println!("RPC Failed: {}", e),
+            cmd @ ("CSET" | "CINC" | "CDEC") if parts.len() == 3 => {
+                if let Ok(val) = parts[2].parse::<i64>() {
+                    let _ = send_request(&mut client, cmd, parts[1], Some(val)).await;
+                } else {
+                    println!("{}", "Value must be an integer".red());
                 }
             }
-        } else {
-            println!("incorrect query format");
-            println!("Type 'HELP' for instructions");
+
+            _ => {
+                println!("{}", "Invalid command. Type HELP.".red());
+            }
         }
     }
 }
