@@ -1,10 +1,11 @@
+use anyhow::Result;
 use dashmap::DashMap;
 use kv_node::{config::Config, network::ReplicationServer};
 use std::{env, net::SocketAddr, path::Path, sync::Arc, time::SystemTime};
 use std::io::Write;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
 
     let config = if args.contains(&"--interactive".to_string()) || args.contains(&"--i".to_string())
@@ -34,12 +35,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         peers.insert(peer_addr.clone(), SystemTime::UNIX_EPOCH);
     }
 
-    // let node_id = config.node_id.clone();
-    let server = ReplicationServer {
+    let server = Arc::new(ReplicationServer {
         store: map.clone(),
         node_id: config.node_id.clone(),
         peers: peers,
-    };
+    });
 
     println!("starting server on {}..", config.listen_address);
 
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn get_interactive_cofig() -> Result<Config, Box<dyn std::error::Error>> {
+fn get_interactive_cofig() -> Result<Config> {
     let mut node_id = String::new();
     print!("enter the node id for this node: ");
     std::io::stdout().flush().unwrap();

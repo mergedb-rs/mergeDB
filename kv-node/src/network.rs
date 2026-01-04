@@ -1,5 +1,7 @@
+use anyhow::Result;
 use dashmap::DashMap;
 use kv_types::{aw_set::AWSet, pn_counter::PNCounter, Merge};
+use rand::{rngs::SmallRng, seq::IndexedRandom, SeedableRng};
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -96,7 +98,10 @@ impl ReplicationService for ReplicationServer {
             );
             println!("Counter set!");
             //need to send an ack that the op has been done
-            Ok(Response::new(PropagateDataResponse { success: true, response: Vec::new() })) //send empty bytes for response
+            Ok(Response::new(PropagateDataResponse {
+                success: true,
+                response: Vec::new(),
+            })) //send empty bytes for response
         } else if value_type == "CINC" {
             let bytes: [u8; 8] = raw_value_bytes.try_into().map_err(|_| {
                 tonic::Status::invalid_argument("invalid byte length for u64, expected 8 bytes")
@@ -111,11 +116,17 @@ impl ReplicationService for ReplicationServer {
                 CRDTValue::Counter(local_counter) => {
                     local_counter.increment(self.node_id.clone(), numeric_val);
                     println!("Counter incremented by: {}", numeric_val);
-                    return Ok(Response::new(PropagateDataResponse { success: true, response: Vec::new() }))
+                    return Ok(Response::new(PropagateDataResponse {
+                        success: true,
+                        response: Vec::new(),
+                    }));
                 }
                 _ => println!("type mismatch: key exisits, but value is not of type PNCounter"),
             }
-            Ok(Response::new(PropagateDataResponse { success: false, response: Vec::new() }))
+            Ok(Response::new(PropagateDataResponse {
+                success: false,
+                response: Vec::new(),
+            }))
         } else if value_type == "CDEC" {
             let bytes: [u8; 8] = raw_value_bytes.try_into().map_err(|_| {
                 tonic::Status::invalid_argument("invalid byte length for u64, expected 8 bytes")
@@ -130,11 +141,17 @@ impl ReplicationService for ReplicationServer {
                 CRDTValue::Counter(local_counter) => {
                     local_counter.decrement(self.node_id.clone(), numeric_val);
                     println!("Counter decremented by: {}", numeric_val);
-                    return Ok(Response::new(PropagateDataResponse { success: true, response: Vec::new() }))
+                    return Ok(Response::new(PropagateDataResponse {
+                        success: true,
+                        response: Vec::new(),
+                    }));
                 }
                 _ => println!("type mismatch: key exisits, but value is not of type PNCounter"),
             }
-            Ok(Response::new(PropagateDataResponse { success: false, response: Vec::new() }))
+            Ok(Response::new(PropagateDataResponse {
+                success: false,
+                response: Vec::new(),
+            }))
         } else if value_type == "CGET" {
             //no need to resolve raw_value_bytes here, "CGET key"
             println!("received valid CGET, get value of key: {}", key);
@@ -144,14 +161,23 @@ impl ReplicationService for ReplicationServer {
                 CRDTValue::Counter(local_counter) => {
                     let value = local_counter.value();
                     println!("value is {}", value);
-                    return Ok(Response::new(PropagateDataResponse { success: true, response: value.to_be_bytes().to_vec() }))
+                    return Ok(Response::new(PropagateDataResponse {
+                        success: true,
+                        response: value.to_be_bytes().to_vec(),
+                    }));
                 }
                 _ => println!("type mismatch: key exisits, but value is not of type PNCounter"),
             }
-            Ok(Response::new(PropagateDataResponse { success: false, response: Vec::new() }))
+            Ok(Response::new(PropagateDataResponse {
+                success: false,
+                response: Vec::new(),
+            }))
         } else {
             println!("other types soon!");
-            Ok(Response::new(PropagateDataResponse { success: false, response: Vec::new() }))
+            Ok(Response::new(PropagateDataResponse {
+                success: false,
+                response: Vec::new(),
+            }))
         }
     }
 
@@ -161,12 +187,15 @@ impl ReplicationService for ReplicationServer {
     ) -> Result<tonic::Response<GossipChangesResponse>, tonic::Status> {
         let changes_inner = changes.into_inner();
         let key = changes_inner.key;
-        let counter = changes_inner.counter.unwrap();
+        let counter = match changes_inner.counter {
+            Some(counter) => counter,
+            None => return Ok(Response::new(GossipChangesResponse { success: false })),
+        };
         let remote_counter = PNCounter::from(counter); //the actual PNCounter type
 
         //call merge now with the value corresponding to the same key in this node
         self.store
-            .entry(key)
+            .entry(key.clone())
             .and_modify(|current_value| {
                 match &mut current_value.data {
                     CRDTValue::Counter(local_counter) => {
@@ -179,9 +208,14 @@ impl ReplicationService for ReplicationServer {
                 current_value.last_updated = SystemTime::now()
             })
             .or_insert_with(|| StoredValue {
-                data: CRDTValue::Counter(remote_counter),
+                data: CRDTValue::Counter(remote_counter.clone()),
                 last_updated: SystemTime::now(),
             });
+
+        match self.push(key, CRDTValue::Counter(remote_counter)).await {
+            Ok(_) => {}
+            Err(_) => {}
+        };
 
         Ok(Response::new(GossipChangesResponse { success: true }))
     }
@@ -220,7 +254,7 @@ impl ReplicationService for ReplicationServer {
 }
 
 impl ReplicationServer {
-    pub async fn start_listener(&self, config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start_listener(&self, config: Config) -> Result<()> {
         let addr: SocketAddr = config.listen_address.as_str().parse()?;
         Server::builder()
             .add_service(ReplicationServiceServer::new(self.clone()))
@@ -230,53 +264,49 @@ impl ReplicationServer {
         Ok(())
     }
 
-    // pub async fn push(
-    //     &self,
-    //     key: String,
-    //     value: CRDTValue,
-    // ) -> Result<(), Box<dyn std::error::Error>> {
-    //     //send updates to k randomly chosen peers
-    //     //first make sure to preconnect to 3 randomly chosen peer nodes
-    //     //lots of things to think of, like what if a node goes down, how will this node reconnect to
-    //     //some other node etc, will tackle these later
+    pub async fn push(&self, key: String, value: CRDTValue) -> Result<()> {
+        //send updates to k randomly chosen peers
+        //first make sure to preconnect to 3 randomly chosen peer nodes
+        //lots of things to think of, like what if a node goes down, how will this node reconnect to
+        //some other node etc, will tackle these later
 
-    //     let mut rng = rand::rng();
+        let mut rng = SmallRng::from_os_rng();
 
-    //     let chosen_peers: Vec<String> = {
-    //         let peers: Vec<String> = self.peers.iter().map(|entry| entry.key().clone()).collect();
-    //         peers.choose_multiple(&mut rng, K).cloned().collect()
-    //     };
+        let chosen_peers: Vec<String> = {
+            let peers: Vec<String> = self.peers.iter().map(|entry| entry.key().clone()).collect();
+            peers.choose_multiple(&mut rng, K).cloned().collect()
+        };
 
-    //     for peer_addr in chosen_peers.iter() {
-    //         match ReplicationServiceClient::connect((*peer_addr).clone()).await {
-    //             Ok(mut peer_client) => match &value {
-    //                 CRDTValue::Counter(inner) => {
-    //                     let state = Request::new(GossipChangesRequest {
-    //                         key: key.clone(),
-    //                         counter: Some(PnCounterMessage::from(inner.clone())),
-    //                     });
+        for peer_addr in chosen_peers.iter() {
+            match ReplicationServiceClient::connect((*peer_addr).clone()).await {
+                Ok(mut peer_client) => match &value {
+                    CRDTValue::Counter(inner) => {
+                        let state = Request::new(GossipChangesRequest {
+                            key: key.clone(),
+                            counter: Some(PnCounterMessage::from(inner.clone())),
+                        });
 
-    //                     println!("connected to the peer with id: {}", peer_addr);
-    //                     match peer_client.gossip_changes(state).await {
-    //                         Ok(response) => {
-    //                             println!("Response from peer: {:?}", response.into_inner())
-    //                         }
-    //                         Err(e) => println!("failed to send update to {}: {}", peer_addr, e),
-    //                     }
-    //                 }
-    //                 _ => print!("other types soon!"),
-    //             },
-    //             Err(e) => {
-    //                 println!("failed to connect to {}: {}", peer_addr, e);
-    //                 continue;
-    //             }
-    //         }
-    //     }
+                        println!("connected to the peer with id: {}", peer_addr);
+                        match peer_client.gossip_changes(state).await {
+                            Ok(response) => {
+                                println!("Response from peer: {:?}", response.into_inner())
+                            }
+                            Err(e) => println!("failed to send update to {}: {}", peer_addr, e),
+                        }
+                    }
+                    _ => print!("other types soon!"),
+                },
+                Err(e) => {
+                    println!("failed to connect to {}: {}", peer_addr, e);
+                    continue;
+                }
+            }
+        }
 
-    //     Ok(())
-    // }
+        Ok(())
+    }
 
-    pub async fn create_and_gossip_batch(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn create_and_gossip_batch(&self) -> Result<()> {
         //a connection pool of rpc connections so as to not cause redundant ::connect's again if
         //a node has already been connected to in an earlier iteration
 
