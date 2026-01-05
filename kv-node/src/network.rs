@@ -85,18 +85,26 @@ impl ReplicationService for ReplicationServer {
 
             println!("received valid CSET: {}", numeric_val);
 
-            let new_pn: CRDTValue = CRDTValue::Counter(PNCounter {
+            let counter = PNCounter {
                 p: HashMap::from([(self.node_id.clone(), numeric_val)]),
                 n: HashMap::from([(self.node_id.clone(), 0)]),
-            });
+            };
+
+            let new_pn: CRDTValue = CRDTValue::Counter(counter.clone());
             map.insert(
-                key,
+                key.clone(),
                 StoredValue {
                     data: new_pn,
                     last_updated: SystemTime::now(),
                 },
             );
             println!("Counter set!");
+
+            match self.push(key, CRDTValue::Counter(counter)).await {
+                Ok(_) => {}
+                Err(_) => {}
+            };
+
             //need to send an ack that the op has been done
             Ok(Response::new(PropagateDataResponse {
                 success: true,
@@ -116,6 +124,15 @@ impl ReplicationService for ReplicationServer {
                 CRDTValue::Counter(local_counter) => {
                     local_counter.increment(self.node_id.clone(), numeric_val);
                     println!("Counter incremented by: {}", numeric_val);
+
+                    match self
+                        .push(key, CRDTValue::Counter(local_counter.clone()))
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(_) => {}
+                    };
+
                     return Ok(Response::new(PropagateDataResponse {
                         success: true,
                         response: Vec::new(),
@@ -141,6 +158,15 @@ impl ReplicationService for ReplicationServer {
                 CRDTValue::Counter(local_counter) => {
                     local_counter.decrement(self.node_id.clone(), numeric_val);
                     println!("Counter decremented by: {}", numeric_val);
+
+                    match self
+                        .push(key, CRDTValue::Counter(local_counter.clone()))
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(_) => {}
+                    };
+
                     return Ok(Response::new(PropagateDataResponse {
                         success: true,
                         response: Vec::new(),
@@ -199,8 +225,16 @@ impl ReplicationService for ReplicationServer {
             .and_modify(|current_value| {
                 match &mut current_value.data {
                     CRDTValue::Counter(local_counter) => {
+                        let old_state = local_counter.clone();
+
                         local_counter.merge(&mut remote_counter.clone());
-                        println!("merged from remote node");
+
+                        if *local_counter != old_state {
+                            println!("Merged NEW update for {}", key);
+                            current_value.last_updated = SystemTime::now();
+                        } else {
+                            println!("Ignored redundant update for {}", key);
+                        }
                     } //other types later
                     _ => println!("type mismatch: key exisits, but value is not of type PNCounter"),
                 }
@@ -211,11 +245,6 @@ impl ReplicationService for ReplicationServer {
                 data: CRDTValue::Counter(remote_counter.clone()),
                 last_updated: SystemTime::now(),
             });
-
-        match self.push(key, CRDTValue::Counter(remote_counter)).await {
-            Ok(_) => {}
-            Err(_) => {}
-        };
 
         Ok(Response::new(GossipChangesResponse { success: true }))
     }
@@ -229,19 +258,25 @@ impl ReplicationService for ReplicationServer {
             let remote_counter = PNCounter::from(counter);
 
             self.store
-                .entry(key)
+                .entry(key.clone())
                 .and_modify(|current_value| {
                     match &mut current_value.data {
                         CRDTValue::Counter(local_counter) => {
+                            let old_state = local_counter.clone();
+
                             local_counter.merge(&mut remote_counter.clone());
-                            println!("merged from remote node");
+
+                            if *local_counter != old_state {
+                                println!("Merged NEW update for {}", key);
+                                current_value.last_updated = SystemTime::now();
+                            } else {
+                                println!("Ignored redundant update for {}", key);
+                            }
                         } //other types later
                         _ => println!(
                             "type mismatch: key exisits, but value is not of type PNCounter"
                         ),
                     }
-
-                    current_value.last_updated = SystemTime::now()
                 })
                 .or_insert_with(|| StoredValue {
                     data: CRDTValue::Counter(remote_counter),
@@ -345,9 +380,9 @@ impl ReplicationServer {
                     let mut batch = HashMap::new();
                     let mut updates_sent = 0;
 
-                    for key_val in self.store.iter() {
-                        let key = key_val.key();
-                        let value = key_val.value();
+                    for mut key_val in self.store.iter_mut() {
+                        let key = key_val.key().clone();
+                        let value = key_val.value_mut();
 
                         if value.last_updated.elapsed().unwrap_or(Duration::ZERO)
                             < Duration::from_secs(2)

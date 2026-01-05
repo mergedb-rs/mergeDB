@@ -13,7 +13,7 @@ use std::cmp;
 
 type NodeId = String;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PNCounter {
     pub p: HashMap<NodeId, u64>,
     pub n: HashMap<NodeId, u64>,
