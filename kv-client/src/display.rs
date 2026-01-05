@@ -1,4 +1,3 @@
-// src/display.rs
 use figlet_rs::FIGfont;
 use colored::*;
 use std::io::{stdin, stdout, Write};
