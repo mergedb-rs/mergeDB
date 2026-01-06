@@ -119,7 +119,12 @@ impl ReplicationService for ReplicationServer {
 
             println!("received valid CINC, to increase by: {}", numeric_val);
 
-            let mut val = map.get_mut(&key).unwrap();
+            let mut val = match map.get_mut(&key) {
+                Some(val) => val,
+                None => {
+                    return Err(tonic::Status::not_found("The requested key was not found!"));
+                }
+            };
             match &mut val.data {
                 CRDTValue::Counter(local_counter) => {
                     local_counter.increment(self.node_id.clone(), numeric_val);
@@ -153,7 +158,12 @@ impl ReplicationService for ReplicationServer {
 
             println!("received valid CDEC, to decrease by: {}", numeric_val);
 
-            let mut val = map.get_mut(&key).unwrap();
+            let mut val = match map.get_mut(&key) {
+                Some(val) => val,
+                None => {
+                    return Err(tonic::Status::not_found("The requested key was not found!"));
+                }
+            };
             match &mut val.data {
                 CRDTValue::Counter(local_counter) => {
                     local_counter.decrement(self.node_id.clone(), numeric_val);
@@ -182,7 +192,12 @@ impl ReplicationService for ReplicationServer {
             //no need to resolve raw_value_bytes here, "CGET key"
             println!("received valid CGET, get value of key: {}", key);
 
-            let val = map.get(&key).unwrap();
+            let val = match map.get_mut(&key) {
+                Some(val) => val,
+                None => {
+                    return Err(tonic::Status::not_found("The requested key was not found!"));
+                }
+            };
             match &val.data {
                 CRDTValue::Counter(local_counter) => {
                     let value = local_counter.value();

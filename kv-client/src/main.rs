@@ -1,6 +1,7 @@
 mod cli;
 mod display;
 
+use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
 use colored::*;
@@ -25,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Some(Commands::Interactive) | None => {
             display::show_welcome_screen_start();
-            run_interactive(client).await;
+            run_interactive(client).await?;
         }
 
         Some(Commands::Cset { key, value }) => {
@@ -75,12 +76,12 @@ async fn send_request(
     Ok(())
 }
 
-async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::Channel>) {
+async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::Channel>) -> Result<()>{
     loop {
         crate::display::show_prompt();
 
         let mut input = String::new();
-        stdin().read_line(&mut input).unwrap();
+        stdin().read_line(&mut input)?;
         let parts: Vec<&str> = input.split_whitespace().collect();
 
         if parts.is_empty() {
@@ -119,4 +120,6 @@ async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::
             }
         }
     }
+
+    Ok(())
 }

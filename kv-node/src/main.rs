@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
 fn get_interactive_cofig() -> Result<Config> {
     let mut node_id = String::new();
     print!("enter the node id for this node: ");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     std::io::stdin()
         .read_line(&mut node_id)
         .expect("failed to read line, restart node again");
@@ -67,7 +67,7 @@ fn get_interactive_cofig() -> Result<Config> {
 
     let mut node_addr = String::new();
     print!("enter node's address (egs: 127.0.0.1:8000): ");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     std::io::stdin().read_line(&mut node_addr)?;
     let node_addr = node_addr.trim().to_string();
 
@@ -77,18 +77,18 @@ fn get_interactive_cofig() -> Result<Config> {
 
     let mut num_peers = String::new();
     print!("enter number of peers: ");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     std::io::stdin()
         .read_line(&mut num_peers)
         .expect("failed to read line, restart node again");
-    let num_peers = num_peers.trim().parse::<i32>().unwrap();
+    let num_peers = num_peers.trim().parse::<i32>()?;
 
     let mut peers_config = Vec::new(); //for the Config struct
 
     for i in 0..num_peers {
         let mut peer_addr = String::new();
         print!("enter the peer #{} addr (egs: 127.0.0.1:8000): ", i + 1);
-        std::io::stdout().flush().unwrap();
+        std::io::stdout().flush()?;
         std::io::stdin()
             .read_line(&mut peer_addr)
             .expect("failed to read line, restart node again");
