@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Some(Commands::Interactive) | None => {
-            display::show_welcome_screen_start();
+            display::show_welcome_screen_start()?;
             run_interactive(client).await?;
         }
 

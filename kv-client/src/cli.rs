@@ -8,7 +8,6 @@ use clap::{Parser, Subcommand};
     long_about = None
 )]
 pub struct Cli {
-    /// Address of the node (e.g. 127.0.0.1:8000)
     #[arg(short, long)]
     pub addr: Option<String>,
 
