@@ -1,0 +1,7 @@
+node_id = "node-2"
+listen_address = "0.0.0.0:8000"
+
+peers = [
+  "node1:8000",
+  "node3:8000"
+]

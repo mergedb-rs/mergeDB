@@ -38,7 +38,7 @@ pub struct StoredValue {
 #[derive(Debug, Clone)]
 pub struct ReplicationServer {
     pub store: Arc<DashMap<String, StoredValue>>,
-    pub node_id: String,
+    pub config: Arc<Config>,
     pub peers: Arc<DashMap<String, SystemTime>>,
 }
 
@@ -86,8 +86,8 @@ impl ReplicationService for ReplicationServer {
             println!("received valid CSET: {}", numeric_val);
 
             let counter = PNCounter {
-                p: HashMap::from([(self.node_id.clone(), numeric_val)]),
-                n: HashMap::from([(self.node_id.clone(), 0)]),
+                p: HashMap::from([(self.config.node_id.clone(), numeric_val)]),
+                n: HashMap::from([(self.config.node_id.clone(), 0)]),
             };
 
             let new_pn: CRDTValue = CRDTValue::Counter(counter.clone());
@@ -119,10 +119,15 @@ impl ReplicationService for ReplicationServer {
 
             println!("received valid CINC, to increase by: {}", numeric_val);
 
-            let mut val = map.get_mut(&key).unwrap();
+            let mut val = match map.get_mut(&key) {
+                Some(val) => val,
+                None => {
+                    return Err(tonic::Status::not_found("The requested key was not found!"));
+                }
+            };
             match &mut val.data {
                 CRDTValue::Counter(local_counter) => {
-                    local_counter.increment(self.node_id.clone(), numeric_val);
+                    local_counter.increment(self.config.node_id.clone(), numeric_val);
                     println!("Counter incremented by: {}", numeric_val);
 
                     match self
@@ -153,10 +158,15 @@ impl ReplicationService for ReplicationServer {
 
             println!("received valid CDEC, to decrease by: {}", numeric_val);
 
-            let mut val = map.get_mut(&key).unwrap();
+            let mut val = match map.get_mut(&key) {
+                Some(val) => val,
+                None => {
+                    return Err(tonic::Status::not_found("The requested key was not found!"));
+                }
+            };
             match &mut val.data {
                 CRDTValue::Counter(local_counter) => {
-                    local_counter.decrement(self.node_id.clone(), numeric_val);
+                    local_counter.decrement(self.config.node_id.clone(), numeric_val);
                     println!("Counter decremented by: {}", numeric_val);
 
                     match self
@@ -182,7 +192,12 @@ impl ReplicationService for ReplicationServer {
             //no need to resolve raw_value_bytes here, "CGET key"
             println!("received valid CGET, get value of key: {}", key);
 
-            let val = map.get(&key).unwrap();
+            let val = match map.get_mut(&key) {
+                Some(val) => val,
+                None => {
+                    return Err(tonic::Status::not_found("The requested key was not found!"));
+                }
+            };
             match &val.data {
                 CRDTValue::Counter(local_counter) => {
                     let value = local_counter.value();
@@ -289,8 +304,8 @@ impl ReplicationService for ReplicationServer {
 }
 
 impl ReplicationServer {
-    pub async fn start_listener(&self, config: Config) -> Result<()> {
-        let addr: SocketAddr = config.listen_address.as_str().parse()?;
+    pub async fn start_listener(&self) -> Result<()> {
+        let addr: SocketAddr = self.config.listen_address.as_str().parse()?;
         Server::builder()
             .add_service(ReplicationServiceServer::new(self.clone()))
             .serve(addr)

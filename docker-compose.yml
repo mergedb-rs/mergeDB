@@ -1,0 +1,34 @@
+services:
+  node1:
+    build: .
+    container_name: kv-node-1
+    volumes:
+      - ./config/node1.toml:/app/config.toml
+    ports:
+      - "8001:8000"
+    networks:
+      - kv-net
+
+  node2:
+    build: .
+    container_name: kv-node-2
+    volumes:
+      - ./config/node2.toml:/app/config.toml
+    ports:
+      - "8002:8000"
+    networks:
+      - kv-net
+
+  node3:
+    build: .
+    container_name: kv-node-3
+    volumes:
+      - ./config/node3.toml:/app/config.toml
+    ports:
+      - "8003:8000"
+    networks:
+      - kv-net
+
+networks:
+  kv-net:
+    driver: bridge
