@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
         store: store,
         config: Arc::new(config),
         peers: peers,
+        pool: Arc::new(DashMap::new()),
     });
 
     let server_clone = server.clone();
