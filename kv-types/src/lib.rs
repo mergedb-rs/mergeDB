@@ -2,6 +2,8 @@ pub mod aw_set;
 pub mod lww_set;
 pub mod pn_counter;
 
+pub type NodeId = String;
+
 pub trait Merge {
     fn merge(&mut self, other: &mut Self);
 }
@@ -10,5 +12,5 @@ pub trait Merge {
 pub enum CrdtValue {
     Counter(pn_counter::PNCounter),
     Register(lww_set::LwwSet),
-    Set(aw_set::AWSet<String>), //for now its String
+    Set(aw_set::AWSet), //for now its String
 }

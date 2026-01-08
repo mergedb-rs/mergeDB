@@ -3,174 +3,221 @@ use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
 };
+use crate::NodeId;
 
-#[derive(Debug)]
-pub struct AWSet<T>
-where
-    T: Eq + Hash + Clone,
-{
-    //tags will look like {"hiking": {version_nos...}, "rafting": {version_nos...}}
-
-    //version_nos are used to uniquely identify which element with the same name is present
-    //in the map
-
-    //where the order need not be maintained as thats not the primary task at hand.
-    //The primary task here is to ensure that additions and removals of tags are eventually
-    //consistent across both the nodes
-    pub current_tags: HashSet<T>, //this is what reflects the actual set of tags
-    add_tags: HashMap<T, (u32, Vec<u32>)>, //to not make finding the length O(n) time
-    remove_tags: HashMap<T, (u32, Vec<u32>)>,
+//Dot here is used to identify from which node the change has occurred and when(when is handled by counter)
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct Dot {
+    pub node_id: String,
+    pub counter: u64,
 }
 
-impl<T> AWSet<T>
-where
-    T: Eq + Hash + Clone,
+
+//add_tags structure: {"apple": {("node_1", 1), ("node_1", 5), ("node_2", 3)}}
+//similar for remove_tags
+#[derive(Debug, Clone)]
+pub struct AWSet
 {
-    //PRINCIPLE FOLLOWED: never remove from add_tags or the remove_tags map, they are meant
-    //to be totally self contained, and have the history of all the operations
+    pub id: NodeId,
+    pub clock: u64,      
+    pub add_tags: HashMap<String, HashSet<Dot>>,
+    pub remove_tags: HashMap<String, HashSet<Dot>>,
+}
 
-    //user can only deal with the current_tags set, the add_tags and remove_tags are
-    //private to the definition of the type
-
-    fn new(current_tags: HashSet<T>) -> Self {
+impl AWSet
+{
+    fn new(node_id: NodeId) -> Self {
         AWSet {
-            current_tags: current_tags,
+            id: node_id,
+            clock: 0,
             add_tags: HashMap::new(),
             remove_tags: HashMap::new(),
         }
     }
-
-    fn add_tag(&mut self, tag: T) {
-        //since its a set eventually, if the tag is not already in remove_tags map,
-        //and its not already in add_tags map, only then add it, in all other cases
-
-        let mut version_num = 0;
-        if self.add_tags.contains_key(&tag) {
-            version_num = self.add_tags.get(&tag).expect("could not extract value").0;
-            //this way, the version number for the same tag
-            //remains consistent across nodes, so this helps during merge()
-        }
-
-        //if tag does not already exist in both of the maps OR
-        if !self.add_tags.contains_key(&tag) || !self.remove_tags.contains_key(&tag) {
-            self.add_tags.insert(tag, (1, vec![version_num]));
-        }
-        //if lens of both the vectors for that tag are the same, it means that that tag no longer exists in the set
-        //(equal number of additions and removals), so can add
-        else if self.add_tags.get(&tag).expect("could not extract value").0
-            == self
-                .remove_tags
-                .get(&tag)
-                .expect("could not extract value")
-                .0
-        {
-            let val = self
-                .add_tags
-                .get_mut(&tag)
-                .expect("could not extract value");
-            val.0 += 1; //incrementing the len by 1
-            val.1.push(version_num);
+    
+    fn next_dot(&mut self) -> Dot {
+        self.clock += 1;
+        Dot {
+            node_id: self.id.clone(),
+            counter: self.clock,
         }
     }
 
-    fn remove_tag(&mut self, tag: T) {
-        if !self.add_tags.contains_key(&tag) {
-            println!("tag has not been inserted already!");
-            return;
-        }
-
-        let version_index_to_be_deleted: usize =
-            (self.add_tags.get(&tag).expect("could not extract value").0 - 1) as usize;
-        let version_to_be_deleted = self.add_tags.get(&tag).expect("could not extract value").1
-            [version_index_to_be_deleted];
-
-        if !self.remove_tags.contains_key(&tag) {
-            let val = self
-                .remove_tags
-                .get_mut(&tag)
-                .expect("could not extract value");
-            val.0 = 1;
-            val.1 = vec![version_to_be_deleted];
-        } else {
-            let val = self
-                .remove_tags
-                .get_mut(&tag)
-                .expect("could not extract value");
-            val.0 += 1;
-            val.1.push(version_to_be_deleted);
-        }
+    fn add(&mut self, tag: String) {
+        let dot = self.next_dot();
+        self.add_tags.entry(tag).or_default().insert(dot);
     }
-
-    //this method emulates the commit action within a node
-    //SHLD BE CALLED AFTER IT HAS MERGED ITSELF WITH ALL OTHER NODES
-    //POSSIBLE DISCREPANCY, SINCE WHEN IT WILL BE MERGED IS "EVENTUAL"
-    //DONT CALL THIS METHOD FOR NOW
-    fn local_merge(&mut self) {
-        //method called whenever a local change is made, so that it is visible to the
-        //that user instantly
-
-        //updaing current_tags based on tags added
-        for tag in self.add_tags.keys() {
-            if !self.current_tags.contains(tag) {
-                self.current_tags.insert(tag.clone());
-            }
-        }
-
-        //updating current_tags based on tags removed
-        for tag in self.remove_tags.keys() {
-            if self.current_tags.contains(tag) {
-                self.current_tags.remove(tag);
+    
+    fn remove(&mut self, tag: String) {
+        //all versions of the tag must be tombstoned, even if those came from additions
+        //from different nodes
+        if let Some(dots) = self.add_tags.get(&tag) {
+            for dot in dots {
+                self.remove_tags.entry(tag.clone()).or_default().insert(dot.clone());
             }
         }
     }
-
-    //TO BE CALLED ONLY AFTER MERGE AND LOCAL_MERGE ON THE NODES, as there is no need
-    //to maintain the add and remove tag maps
-    fn clear_sets(&mut self) {
-        self.add_tags.clear();
-        self.remove_tags.clear();
+    
+    fn read(&self) -> HashSet<String> {
+        let mut visible_elements = HashSet::new();
+        
+        for (tag, add_dots) in &self.add_tags {
+            let dummy_set = HashSet::new();
+            let remove_dots = self.remove_tags.get(tag).unwrap_or(&dummy_set);
+            
+            //if atleast one more instance of this tag is in add_set, its visible
+            if add_dots.difference(remove_dots).count() > 0 {
+                visible_elements.insert(tag.clone());
+            }
+        }
+        visible_elements
     }
 }
 
-impl<T> Merge for AWSet<T>
-where
-    T: Eq + Hash + Clone,
+impl Merge for AWSet
 {
+    //merging would just be union-ising the add_tags and remove_tags
     fn merge(&mut self, other: &mut Self) {
-        //update wrt each other
-
-        //node1 merge, so for some tag t1, go through all of its version numbers in remove_tags map, and if a version
-        //number is in the other node's add_tags map for that tag t1 and not in the other node's remove_tags map,
-        //then retain it, hence the name AddWins Set
-
-        //point here is to set self.current_tags
-
-        //call local_merge method first to get the initial current_tags
-        self.local_merge();
-
-        for tag in self.remove_tags.keys() {
-            let self_removed_values = &self.remove_tags.get(tag).expect("could not get value").1;
-            //let self_add_values = &self.add_tags.get(tag).expect("could not get value").1;
-            let other_remove_values = &other.remove_tags.get(tag).expect("could not get value").1;
-            let other_add_values = &other.add_tags.get(tag).expect("could not get value").1;
-            for v_no in self_removed_values {
-                if other_add_values.contains(&v_no) && !other_remove_values.contains(&v_no) {
-                    self.current_tags.insert(tag.clone());
-                }
+        //merge add_tags
+        for (tag, other_add_dots) in &other.add_tags {
+            let self_dots = self.add_tags.entry(tag.clone()).or_default();
+            for dot in other_add_dots {
+                self_dots.insert(dot.clone());
             }
         }
+        
+        //merge remove_tags
+        for (tag, other_remove_dots) in &other.remove_tags {
+            let self_dots = self.remove_tags.entry(tag.clone()).or_default();
+            for dot in other_remove_dots {
+                self_dots.insert(dot.clone());
+            }
+        }
+        
+        //sync the self clock, lamport clock logic
+        self.clock = std::cmp::max(self.clock, other.clock);
     }
 }
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_add_tag() {
-        let mut replica_a: AWSet<String> = AWSet::new(HashSet::new());
-        let tag = String::from("apple");
-        replica_a.add_tag(tag.clone());
-        assert_eq!(replica_a.add_tags.contains_key(&tag), true);
+    fn test_local_add_remove() {
+        let node_id = String::from("node_1");
+        let mut set = AWSet::new(node_id);
+
+        set.add("apple".to_string());
+        set.add("banana".to_string());
+        
+        let view = set.read();
+        assert!(view.contains("apple"));
+        assert!(view.contains("banana"));
+        assert_eq!(view.len(), 2);
+
+        set.remove("apple".to_string());
+        let view_after = set.read();
+        assert!(!view_after.contains("apple"));
+        assert!(view_after.contains("banana"));
+        assert_eq!(view_after.len(), 1);
+    }
+
+    #[test]
+    fn test_simple_merge() {
+        let mut replica_a = AWSet::new("node_a".to_string());
+        replica_a.add("hiking".to_string());
+
+        let mut replica_b = AWSet::new("node_b".to_string());
+        replica_b.add("swimming".to_string());
+
+        //merge B into A
+        replica_a.merge(&mut replica_b);
+
+        let view = replica_a.read();
+        assert!(view.contains("hiking"));
+        assert!(view.contains("swimming"));
+        assert_eq!(view.len(), 2);
+    }
+
+    #[test]
+    fn test_add_wins_concurrent_conflict() {
+        // 1. Both nodes start with "apple".
+        // 2. Node A removes "apple".
+        // 3. Node B concurrently adds "apple" (readds).
+        // 4. Merge. "apple" still exists because Bs addition is newer (different dot).
+
+        let mut replica_a = AWSet::new("node_a".to_string());
+        replica_a.add("apple".to_string()); // Creates Dot (A, 1)
+
+        //simulate sync: B starts with the same state as A
+        let mut replica_b = replica_a.clone();
+        replica_b.id = "node_b".to_string(); 
+
+        //Node A removes apple (Tombstones Dot (A,1))
+        replica_a.remove("apple".to_string());
+        assert!(!replica_a.read().contains("apple"));
+
+        //Node B adds apple concurrently (Creates Dot (B, 2))
+        //Clock is 2 as B inherited As clock of 1.
+        replica_b.add("apple".to_string());
+        assert!(replica_b.read().contains("apple"));
+
+        //merge B into A
+        replica_a.merge(&mut replica_b);
+
+        // The set contains:
+        // Add-Set: {(A,1), (B,2)}
+        // Remove-Set: {(A,1)}
+        // (B,2) is in Add but not Remove, so visible.
+        assert!(replica_a.read().contains("apple"), "Add should win over Remove in concurrency");
+    }
+
+    #[test]
+    fn test_remove_sync() {
+        let mut replica_a = AWSet::new("node_a".to_string());
+        replica_a.add("apple".to_string());
+
+        let mut replica_b = AWSet::new("node_b".to_string());
+        
+        replica_b.merge(&mut replica_a);
+        assert!(replica_b.read().contains("apple"));
+
+        replica_a.remove("apple".to_string());
+
+        replica_b.merge(&mut replica_a);
+        
+        assert!(!replica_b.read().contains("apple"));
+    }
+
+    #[test]
+    fn test_merge_is_commutative() {
+        let mut replica_a = AWSet::new("node_a".to_string());
+        replica_a.add("apple".to_string());
+        replica_a.remove("apple".to_string()); 
+        replica_a.add("banana".to_string());
+
+        let mut replica_b = AWSet::new("node_b".to_string());
+        replica_b.add("apple".to_string()); 
+        replica_b.add("cherry".to_string());
+
+        let mut a_then_b = replica_a.clone();
+        a_then_b.merge(&mut replica_b);
+
+        let mut b_then_a = replica_b.clone();
+        b_then_a.merge(&mut replica_a);
+
+        //check lengths
+        assert_eq!(a_then_b.read().len(), b_then_a.read().len());
+        
+        //check contents
+        let view_a = a_then_b.read();
+        assert!(view_a.contains("banana"));
+        assert!(view_a.contains("cherry"));
+        assert!(view_a.contains("apple"));
+
+        let view_b = b_then_a.read();
+        assert_eq!(view_a, view_b);
     }
 }

@@ -1,6 +1,7 @@
 use super::Merge;
 use std::collections::HashMap;
 use std::cmp;
+use crate::NodeId;
 
 //Follows a (node_id, count) model, for the positive and negative counters. An example to make this clear:
 //if node_a increments a key, say called "likes", corresponding to which the value is a PNCounter, 
@@ -9,9 +10,6 @@ use std::cmp;
 //another increment, it becomes {p: {"node_a": 2}, n: 0}. Now upon merging say node_b with node_a, we get
 //{p: {"node_a": 2, "node_b": 1}, n: 0}. This is obtained by taking the max across the nodes for the value 
 //of p or n, and the union-ising it. Then the final value reflected will be 2 + 1 = 3. 
-
-
-type NodeId = String;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PNCounter {
