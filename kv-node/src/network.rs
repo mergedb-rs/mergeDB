@@ -40,6 +40,7 @@ pub struct ReplicationServer {
     pub store: Arc<DashMap<String, StoredValue>>,
     pub config: Arc<Config>,
     pub peers: Arc<DashMap<String, SystemTime>>,
+    pub pool: Arc<DashMap<String, ReplicationServiceClient<Channel>>>,
 }
 
 // convert domain -> proto for sending
@@ -320,6 +321,8 @@ impl ReplicationServer {
         //lots of things to think of, like what if a node goes down, how will this node reconnect to
         //some other node etc, will tackle these later
 
+        println!("Receieved {}-{:#?} to {}", key, value, self.config.node_id);
+
         let mut rng = SmallRng::from_os_rng();
 
         let chosen_peers: Vec<String> = {
@@ -328,28 +331,42 @@ impl ReplicationServer {
         };
 
         for peer_addr in chosen_peers.iter() {
-            match ReplicationServiceClient::connect((*peer_addr).clone()).await {
-                Ok(mut peer_client) => match &value {
-                    CRDTValue::Counter(inner) => {
-                        let state = Request::new(GossipChangesRequest {
-                            key: key.clone(),
-                            counter: Some(PnCounterMessage::from(inner.clone())),
-                        });
+            if !self.pool.contains_key(peer_addr) {
+                let endpoint = if peer_addr.starts_with("http") {
+                    peer_addr.clone()
+                } else {
+                    format!("http://{}", peer_addr)
+                };
 
-                        println!("connected to the peer with id: {}", peer_addr);
-                        match peer_client.gossip_changes(state).await {
-                            Ok(response) => {
-                                println!("Response from peer: {:?}", response.into_inner())
-                            }
-                            Err(e) => println!("failed to send update to {}: {}", peer_addr, e),
-                        }
+                match ReplicationServiceClient::connect(endpoint).await {
+                    Ok(client) => {
+                        self.pool.insert(peer_addr.clone(), client);
                     }
-                    _ => print!("other types soon!"),
-                },
-                Err(e) => {
-                    println!("failed to connect to {}: {}", peer_addr, e);
-                    continue;
+                    Err(e) => {
+                        println!("failed to connect to {}: {}", peer_addr, e);
+                        continue;
+                    }
                 }
+            }
+
+            if let Some(mut peer_client) = self.pool.get_mut(peer_addr) {
+                match &value {
+                        CRDTValue::Counter(inner) => {
+                            let state = Request::new(GossipChangesRequest {
+                                key: key.clone(),
+                                counter: Some(PnCounterMessage::from(inner.clone())),
+                            });
+
+                            println!("connected to the peer with id: {}", peer_addr);
+                            match peer_client.gossip_changes(state).await {
+                                Ok(response) => {
+                                    println!("Response from peer: {:?}", response.into_inner())
+                                }
+                                Err(e) => println!("failed to send update to {}: {}", peer_addr, e),
+                            }
+                        }
+                        _ => print!("other types soon!"),
+                    }
             }
         }
 
@@ -360,8 +377,8 @@ impl ReplicationServer {
         //a connection pool of rpc connections so as to not cause redundant ::connect's again if
         //a node has already been connected to in an earlier iteration
 
-        let mut connection_pool: HashMap<String, ReplicationServiceClient<Channel>> =
-            HashMap::new();
+        // let mut connection_pool: HashMap<String, ReplicationServiceClient<Channel>> =
+        //     HashMap::new();
 
         loop {
             let mut chosen_peers: Vec<String> = Vec::new();
@@ -372,7 +389,7 @@ impl ReplicationServer {
             }
 
             for peer_addr in &chosen_peers {
-                if !connection_pool.contains_key(peer_addr) {
+                if !self.pool.contains_key(peer_addr) {
                     let endpoint = if peer_addr.starts_with("http") {
                         peer_addr.clone()
                     } else {
@@ -381,7 +398,7 @@ impl ReplicationServer {
 
                     match ReplicationServiceClient::connect(endpoint).await {
                         Ok(client) => {
-                            connection_pool.insert(peer_addr.clone(), client);
+                            self.pool.insert(peer_addr.clone(), client);
                         }
                         Err(e) => {
                             println!("failed to connect to {}: {}", peer_addr, e);
@@ -391,7 +408,7 @@ impl ReplicationServer {
                 }
 
                 //for each key in the current node, transfer each of the node states for merge
-                if let Some(peer_client) = connection_pool.get_mut(peer_addr) {
+                if let Some(mut peer_client) = self.pool.get_mut(peer_addr) {
                     let mut batch = HashMap::new();
                     let mut updates_sent = 0;
 
@@ -441,6 +458,5 @@ impl ReplicationServer {
             //wait for 2s before the next gossip round
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         }
-        Ok(())
     }
 }

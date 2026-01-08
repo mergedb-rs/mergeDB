@@ -1,5 +1,5 @@
 # Builder
-FROM rust:1.92.0-trixiec AS builder
+FROM rust:1.92.0-trixie AS builder
 
 WORKDIR /app
 
