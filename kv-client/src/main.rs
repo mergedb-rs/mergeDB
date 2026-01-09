@@ -7,11 +7,28 @@ use cli::{Cli, Commands};
 use colored::*;
 use communication::replication_service_client::ReplicationServiceClient;
 use communication::PropagateDataRequest;
+use std::fmt::Debug;
 use std::io::stdin;
 use tonic::Request;
 
 pub mod communication {
     tonic::include_proto!("communication");
+}
+
+pub trait ToBytes {
+    fn to_bytes(&self) -> Vec<u8>;
+}
+
+impl ToBytes for i64 {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_be_bytes().to_vec()
+    }
+}
+
+impl ToBytes for String {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
 }
 
 #[tokio::main]
@@ -34,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Some(Commands::Cget { key }) => {
-            send_request(&mut client, "CGET", &key, None).await?;
+            send_request::<i64>(&mut client, "CGET", &key, None).await?;
         }
 
         Some(Commands::Cinc { key, amount }) => {
@@ -44,32 +61,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Cdec { key, amount }) => {
             send_request(&mut client, "CDEC", &key, Some(amount)).await?;
         }
+        
+        Some(Commands::Sadd { key, tag }) => {
+            send_request(&mut client, "SADD", &key, Some(tag)).await?;
+        }
+        
+        Some(Commands::Srem { key, tag }) => {
+            send_request(&mut client, "SREM", &key, Some(tag)).await?;
+        }
+        
+        Some(Commands::Sget { key }) => {
+            send_request::<String>(&mut client, "SGET", &key, None).await?;
+        }
+        
     }
 
     Ok(())
 }
 
-async fn send_request(
+async fn send_request<T>(
     client: &mut ReplicationServiceClient<tonic::transport::Channel>,
     cmd: &str,
     key: &str,
-    value: Option<i64>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = value.map(|v| v.to_be_bytes().to_vec()).unwrap_or_default();
+    value: Option<T>,
+) -> Result<(), Box<dyn std::error::Error>> 
+where 
+    T: ToBytes + Debug,
+{
+    let bytes = value.map(|v| v.to_bytes()).unwrap_or_default();
 
     let request = Request::new(PropagateDataRequest {
         valuetype: cmd.to_string(),
         key: key.to_string(),
         value: bytes,
-    });
+    }); 
 
     let response = client.propagate_data(request).await?;
-
+    let inner = response.into_inner();
+    
     if cmd == "CGET" {
-        let raw = response.into_inner().response;
+        let raw = inner.response;
         let val = i64::from_be_bytes(raw.try_into().unwrap_or([0; 8]));
         println!("{}", format!(":: {}", val).cyan());
-    } else {
+    } else if cmd == "SGET" {
+        //has been serialised by json then converted to string then to be_bytes,
+        let raw = inner.response;
+        let val: Vec<String> = serde_json::from_slice(&raw).expect("failed to desrialise");
+        println!("{}", format!(":: {:?}", val).cyan());
+    }
+    else {
         println!("{}", "✓ OK".green());
     }
 
@@ -95,6 +135,9 @@ async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::
                 println!("  CGET <key>");
                 println!("  CINC <key> <amount>");
                 println!("  CDEC <key> <amount>");
+                println!("  SADD <key> <tag>");
+                println!("  SREM <key> <tag>");
+                println!("  SGET <key>");
                 println!("  EXIT");
             }
 
@@ -104,7 +147,11 @@ async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::
             }
 
             "CGET" if parts.len() == 2 => {
-                let _ = send_request(&mut client, "CGET", parts[1], None).await;
+                let _ = send_request::<i64>(&mut client, "CGET", parts[1], None).await;
+            }
+            
+            "SGET" if parts.len() == 2 => {
+                let _ = send_request::<String>(&mut client, "SGET", parts[1], None).await;
             }
 
             cmd @ ("CSET" | "CINC" | "CDEC") if parts.len() == 3 => {
@@ -114,7 +161,12 @@ async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::
                     println!("{}", "Value must be an integer".red());
                 }
             }
-
+            
+            cmd @ ("SADD" | "SREM") if parts.len() == 3 => {
+                let val = parts[2].to_string();
+                let _ = send_request(&mut client, cmd, parts[1], Some(val)).await;
+            }
+            
             _ => {
                 println!("{}", "Invalid command. Type HELP.".red());
             }

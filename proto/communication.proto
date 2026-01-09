@@ -4,10 +4,35 @@ package communication;
 
 service ReplicationService {
   rpc PropagateData(PropagateDataRequest) returns (PropagateDataResponse);
-
   rpc GossipChanges(GossipChangesRequest) returns (GossipChangesResponse);
-
   rpc GossipBatch(GossipBatchRequest) returns (GossipBatchResponse);
+}
+
+message ProtoDot {
+    string node_id = 1;
+    uint64 counter = 2;
+}
+
+message ProtoDotSet {
+    repeated ProtoDot dots = 1;
+}
+
+message PNCounterMessage {
+  map<string, uint64> p = 1;
+  map<string, uint64> n = 2;
+}
+
+message AWSetMessage {
+    uint64 clock = 1;
+    map<string, ProtoDotSet> add_tags = 2;
+    map<string, ProtoDotSet> remove_tags = 3;
+}
+
+message CRDTData {
+    oneof data {  //this is the enum data
+        PNCounterMessage pn_counter = 1;
+        AWSetMessage aw_set = 2;
+    }
 }
 
 message PropagateDataRequest {
@@ -21,16 +46,9 @@ message PropagateDataResponse {
   bytes response = 2;
 }
 
-message PNCounterMessage {
-  map<string, uint64> p = 1;
-  map<string, uint64> n = 2;
-}
-
 message GossipChangesRequest {
   string key = 1;
-
-  // We should use an enum representing the CRDTs instead of directly specifying them directly
-  PNCounterMessage counter = 2;
+  CRDTData counter = 2;
 }
 
 message GossipChangesResponse {
@@ -38,7 +56,7 @@ message GossipChangesResponse {
 }
 
 message GossipBatchRequest {
-  map<string, PNCounterMessage> batch = 1;
+  map<string, CRDTData> batch = 1;
 }
 
 message GossipBatchResponse {

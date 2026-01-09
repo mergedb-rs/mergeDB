@@ -42,4 +42,22 @@ pub enum Commands {
         key: String,
         amount: i64,
     },
+    
+    /// add to a set
+    Sadd {
+        key: String,
+        tag: String,
+    },
+    
+    /// remove from a set
+    Srem {
+        key: String,
+        tag: String,
+    },
+    
+    /// get the set
+    Sget {
+        key: String,
+    }
+    
 }

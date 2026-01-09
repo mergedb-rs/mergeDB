@@ -15,10 +15,9 @@ pub struct Dot {
 
 //add_tags structure: {"apple": {("node_1", 1), ("node_1", 5), ("node_2", 3)}}
 //similar for remove_tags
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AWSet
 {
-    pub id: NodeId,
     pub clock: u64,      
     pub add_tags: HashMap<String, HashSet<Dot>>,
     pub remove_tags: HashMap<String, HashSet<Dot>>,
@@ -26,29 +25,28 @@ pub struct AWSet
 
 impl AWSet
 {
-    fn new(node_id: NodeId) -> Self {
+    pub fn new() -> Self {
         AWSet {
-            id: node_id,
             clock: 0,
             add_tags: HashMap::new(),
             remove_tags: HashMap::new(),
         }
     }
     
-    fn next_dot(&mut self) -> Dot {
+    pub fn next_dot(&mut self, id: NodeId) -> Dot {
         self.clock += 1;
         Dot {
-            node_id: self.id.clone(),
+            node_id: id,
             counter: self.clock,
         }
     }
 
-    fn add(&mut self, tag: String) {
-        let dot = self.next_dot();
+    pub fn add(&mut self, tag: String, id: NodeId) {
+        let dot = self.next_dot(id);
         self.add_tags.entry(tag).or_default().insert(dot);
     }
     
-    fn remove(&mut self, tag: String) {
+    pub fn remove(&mut self, tag: String) {
         //all versions of the tag must be tombstoned, even if those came from additions
         //from different nodes
         if let Some(dots) = self.add_tags.get(&tag) {
@@ -58,7 +56,7 @@ impl AWSet
         }
     }
     
-    fn read(&self) -> HashSet<String> {
+    pub fn read(&self) -> HashSet<String> {
         let mut visible_elements = HashSet::new();
         
         for (tag, add_dots) in &self.add_tags {
@@ -106,11 +104,11 @@ mod tests {
 
     #[test]
     fn test_local_add_remove() {
-        let node_id = String::from("node_1");
-        let mut set = AWSet::new(node_id);
+        let node_id: NodeId = String::from("node_1");
+        let mut set = AWSet::new();
 
-        set.add("apple".to_string());
-        set.add("banana".to_string());
+        set.add("apple".to_string(), node_id.clone());
+        set.add("banana".to_string(), node_id);
         
         let view = set.read();
         assert!(view.contains("apple"));
@@ -126,16 +124,18 @@ mod tests {
 
     #[test]
     fn test_simple_merge() {
-        let mut replica_a = AWSet::new("node_a".to_string());
-        replica_a.add("hiking".to_string());
+        let node_1: NodeId = String::from("node_1");
+        let mut replica_1 = AWSet::new();
+        replica_1.add("hiking".to_string(), node_1);
 
-        let mut replica_b = AWSet::new("node_b".to_string());
-        replica_b.add("swimming".to_string());
+        let node_2: NodeId = String::from("node_2");
+        let mut replica_2 = AWSet::new();
+        replica_2.add("swimming".to_string(), node_2);
 
-        //merge B into A
-        replica_a.merge(&mut replica_b);
+        //merge node_2 into node_1
+        replica_1.merge(&mut replica_2);
 
-        let view = replica_a.read();
+        let view = replica_1.read();
         assert!(view.contains("hiking"));
         assert!(view.contains("swimming"));
         assert_eq!(view.len(), 2);
@@ -144,69 +144,73 @@ mod tests {
     #[test]
     fn test_add_wins_concurrent_conflict() {
         // 1. Both nodes start with "apple".
-        // 2. Node A removes "apple".
-        // 3. Node B concurrently adds "apple" (readds).
+        // 2. Node 1 removes "apple".
+        // 3. Node 2 concurrently adds "apple" (readds).
         // 4. Merge. "apple" still exists because Bs addition is newer (different dot).
 
-        let mut replica_a = AWSet::new("node_a".to_string());
-        replica_a.add("apple".to_string()); // Creates Dot (A, 1)
+        let node_1: NodeId = String::from("node_1");
+        let mut replica_1 = AWSet::new();
+        replica_1.add("apple".to_string(), node_1); // Creates Dot (A, 1)
 
         //simulate sync: B starts with the same state as A
-        let mut replica_b = replica_a.clone();
-        replica_b.id = "node_b".to_string(); 
+        let node_2: NodeId = String::from("node_2");
+        let mut replica_2 = replica_1.clone();
 
         //Node A removes apple (Tombstones Dot (A,1))
-        replica_a.remove("apple".to_string());
-        assert!(!replica_a.read().contains("apple"));
+        replica_1.remove("apple".to_string());
+        assert!(!replica_1.read().contains("apple"));
 
         //Node B adds apple concurrently (Creates Dot (B, 2))
         //Clock is 2 as B inherited As clock of 1.
-        replica_b.add("apple".to_string());
-        assert!(replica_b.read().contains("apple"));
+        replica_2.add("apple".to_string(), node_2);
+        assert!(replica_2.read().contains("apple"));
 
         //merge B into A
-        replica_a.merge(&mut replica_b);
+        replica_1.merge(&mut replica_2);
 
         // The set contains:
         // Add-Set: {(A,1), (B,2)}
         // Remove-Set: {(A,1)}
         // (B,2) is in Add but not Remove, so visible.
-        assert!(replica_a.read().contains("apple"), "Add should win over Remove in concurrency");
+        assert!(replica_1.read().contains("apple"), "Add should win over Remove in concurrency");
     }
 
     #[test]
     fn test_remove_sync() {
-        let mut replica_a = AWSet::new("node_a".to_string());
-        replica_a.add("apple".to_string());
-
-        let mut replica_b = AWSet::new("node_b".to_string());
+        let node_1: NodeId = String::from("node_1");
+        let mut replica_1 = AWSet::new();
+        replica_1.add("apple".to_string(), node_1);
         
-        replica_b.merge(&mut replica_a);
-        assert!(replica_b.read().contains("apple"));
-
-        replica_a.remove("apple".to_string());
-
-        replica_b.merge(&mut replica_a);
+        let mut replica_2 = AWSet::new();
         
-        assert!(!replica_b.read().contains("apple"));
+        replica_2.merge(&mut replica_1);
+        assert!(replica_2.read().contains("apple"));
+
+        replica_1.remove("apple".to_string());
+
+        replica_2.merge(&mut replica_1);
+        
+        assert!(!replica_2.read().contains("apple"));
     }
 
     #[test]
     fn test_merge_is_commutative() {
-        let mut replica_a = AWSet::new("node_a".to_string());
-        replica_a.add("apple".to_string());
-        replica_a.remove("apple".to_string()); 
-        replica_a.add("banana".to_string());
+        let node_1: NodeId = String::from("node_1");
+        let mut replica_1 = AWSet::new();
+        replica_1.add("apple".to_string(), node_1.clone());
+        replica_1.remove("apple".to_string()); 
+        replica_1.add("banana".to_string(), node_1);
 
-        let mut replica_b = AWSet::new("node_b".to_string());
-        replica_b.add("apple".to_string()); 
-        replica_b.add("cherry".to_string());
+        let node_2: NodeId = String::from("node_2");
+        let mut replica_2 = AWSet::new();
+        replica_2.add("apple".to_string(), node_2.clone()); 
+        replica_2.add("cherry".to_string(), node_2);
 
-        let mut a_then_b = replica_a.clone();
-        a_then_b.merge(&mut replica_b);
+        let mut a_then_b = replica_1.clone();
+        a_then_b.merge(&mut replica_2);
 
-        let mut b_then_a = replica_b.clone();
-        b_then_a.merge(&mut replica_a);
+        let mut b_then_a = replica_2.clone();
+        b_then_a.merge(&mut replica_1);
 
         //check lengths
         assert_eq!(a_then_b.read().len(), b_then_a.read().len());
