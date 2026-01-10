@@ -1,5 +1,5 @@
 pub mod aw_set;
-pub mod lww_set;
+pub mod lww_register;
 pub mod pn_counter;
 
 pub type NodeId = String;
@@ -11,6 +11,6 @@ pub trait Merge {
 //this enum is the value, so mergeDB really would be storing key : CrdtValue
 pub enum CrdtValue {
     Counter(pn_counter::PNCounter),
-    Register(lww_set::LwwSet),
+    Register(lww_register::LwwRegister),
     Set(aw_set::AWSet), //for now its String
 }

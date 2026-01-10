@@ -8,7 +8,7 @@ use crate::NodeId;
 //Dot here is used to identify from which node the change has occurred and when(when is handled by counter)
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Dot {
-    pub node_id: String,
+    pub node_id: NodeId,
     pub counter: u64,
 }
 
