@@ -1,5 +1,5 @@
 [package]
-name = "kv-client"
+name = "mergedb-client"
 version = "0.1.0"
 edition = "2021"
 

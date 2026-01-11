@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dashmap::DashMap;
-use kv_node::{config::Config, network::ReplicationServer};
+use mergedb_node::{config::Config, network::ReplicationServer};
 use std::{path::PathBuf, sync::Arc, time::SystemTime};
 
 #[tokio::main]

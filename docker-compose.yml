@@ -1,7 +1,7 @@
 services:
   node1:
     build: .
-    container_name: kv-node-1
+    container_name: mergedb-node-1
     volumes:
       - ./config/node1.toml:/app/config.toml
     ports:
@@ -11,7 +11,7 @@ services:
 
   node2:
     build: .
-    container_name: kv-node-2
+    container_name: mergedb-node-2
     volumes:
       - ./config/node2.toml:/app/config.toml
     ports:
@@ -21,7 +21,7 @@ services:
 
   node3:
     build: .
-    container_name: kv-node-3
+    container_name: mergedb-node-3
     volumes:
       - ./config/node3.toml:/app/config.toml
     ports:

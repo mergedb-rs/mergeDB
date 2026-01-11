@@ -1,0 +1,11 @@
+[package]
+name = "mergedb-types"
+version = "0.1.0"
+authors = ["Ayush Chakraborty <chakrabortyayush83@gmail.com>"]
+description = "CRDT data structures for mergeDB"
+license = "MIT"
+repository = "https://github.com/mergedb-rs/mergeDB"
+readme = "README.md"
+keywords = ["crdt", "database", "distributed", "mergedb"]
+categories = ["database-implementations", "data-structures"]
+edition = "2021"

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dashmap::DashMap;
-use kv_types::{
+use mergedb_types::{
     aw_set::{AWSet, Dot},
     pn_counter::PNCounter,
     Merge,
