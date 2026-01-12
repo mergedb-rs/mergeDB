@@ -1,9 +1,7 @@
 use anyhow::Result;
 use dashmap::DashMap;
 use mergedb_types::{
-    aw_set::{AWSet, Dot},
-    pn_counter::PNCounter,
-    Merge,
+    Merge, aw_set::{AWSet, Dot as AW_Dot}, lww_register::{Dot as LWW_Dot, LwwRegister}, pn_counter::PNCounter
 };
 use rand::{rngs::SmallRng, seq::IndexedRandom, SeedableRng};
 use std::str::FromStr;
@@ -22,7 +20,7 @@ use crate::{
         replication_service_server::{ReplicationService, ReplicationServiceServer},
         AwSetMessage, CrdtData, GossipBatchRequest, GossipBatchResponse, GossipChangesRequest,
         GossipChangesResponse, PnCounterMessage, PropagateDataRequest, PropagateDataResponse,
-        ProtoDot, ProtoDotSet,
+        ProtoDot, ProtoDotSet, ProtoRegisterDot, LwwRegisterMessage,
     },
     config::Config,
 };
@@ -34,6 +32,7 @@ const BATCH_SIZE: usize = 1000;
 pub enum CRDTValue {
     Counter(PNCounter),
     AWSet(AWSet),
+    LWWRegister(LwwRegister),
 }
 
 #[derive(Debug)]
@@ -59,6 +58,10 @@ pub enum Command {
     SetAdd,     //SADD
     SetRemove,  //SREM
     GetSet,     //SGET
+    SetRegister,  //RSET
+    GetRegister,  //RGET
+    AppendRegister,   //RAPP
+    GetRegisterLen,   //RLEN
     Unknown,
 }
 
@@ -74,6 +77,10 @@ impl FromStr for Command {
             "SADD" => Ok(Command::SetAdd),
             "SREM" => Ok(Command::SetRemove),
             "SGET" => Ok(Command::GetSet),
+            "RSET" => Ok(Command::SetRegister),
+            "RGET" => Ok(Command::GetRegister),
+            "RAPP" => Ok(Command::AppendRegister),
+            "RLEN" => Ok(Command::GetRegisterLen),
             _ => Ok(Command::Unknown),
         }
     }
@@ -100,9 +107,8 @@ impl From<PnCounterMessage> for PNCounter {
 }
 
 //same for AWSet
-
-impl From<Dot> for ProtoDot {
-    fn from(domain: Dot) -> Self {
+impl From<AW_Dot> for ProtoDot {
+    fn from(domain: AW_Dot) -> Self {
         Self {
             node_id: domain.node_id,
             counter: domain.counter,
@@ -110,7 +116,7 @@ impl From<Dot> for ProtoDot {
     }
 }
 
-impl From<ProtoDot> for Dot {
+impl From<ProtoDot> for AW_Dot {
     fn from(wire: ProtoDot) -> Self {
         Self {
             node_id: wire.node_id,
@@ -121,7 +127,7 @@ impl From<ProtoDot> for Dot {
 
 impl From<AWSet> for AwSetMessage {
     fn from(domain: AWSet) -> Self {
-        let convert_map = |input_map: HashMap<String, HashSet<Dot>>| {
+        let convert_map = |input_map: HashMap<String, HashSet<AW_Dot>>| {
             input_map
                 .into_iter()
                 .map(|(tag, dots)| {
@@ -144,7 +150,7 @@ impl From<AwSetMessage> for AWSet {
             input_map
                 .into_iter()
                 .map(|(tag, dot_set)| {
-                    let domain_dots = dot_set.dots.into_iter().map(Dot::from).collect();
+                    let domain_dots = dot_set.dots.into_iter().map(AW_Dot::from).collect();
                     (tag, domain_dots)
                 })
                 .collect()
@@ -157,6 +163,47 @@ impl From<AwSetMessage> for AWSet {
     }
 }
 
+//same for LWWRegister
+impl From<LWW_Dot> for ProtoRegisterDot {
+    fn from(domain: LWW_Dot) -> Self {
+        Self {
+            node_id: domain.node_id,
+            counter: domain.counter,
+            register: domain.register,
+        }
+    }
+}
+
+impl From<ProtoRegisterDot> for LWW_Dot {
+    fn from(wire: ProtoRegisterDot) -> Self {
+        Self {
+            node_id: wire.node_id,
+            counter: wire.counter,
+            register: wire.register,
+        }
+    }
+}
+
+impl From<LwwRegister> for LwwRegisterMessage {
+    fn from(domain: LwwRegister) -> Self {
+        Self {
+            clock: domain.clock,
+            register_state: Some(ProtoRegisterDot::from(domain.register_state)),
+        }
+    }
+}
+
+impl From<LwwRegisterMessage> for LwwRegister {
+    fn from(wire: LwwRegisterMessage) -> Self {
+        let raw_dot = wire.register_state.unwrap_or_default();
+        Self {
+            clock: wire.clock,
+            register_state: LWW_Dot::from(raw_dot),
+        }
+    }
+}
+
+
 #[tonic::async_trait]
 impl ReplicationService for ReplicationServer {
     async fn propagate_data(
@@ -168,7 +215,6 @@ impl ReplicationService for ReplicationServer {
         let value_type = req_inner.valuetype;
         let key = req_inner.key;
         let raw_value_bytes = req_inner.value;
-        // let map = Arc::clone(&self.store);
 
         let command = Command::from_str(&value_type).unwrap_or(Command::Unknown);
 
@@ -180,6 +226,10 @@ impl ReplicationService for ReplicationServer {
             Command::SetAdd => self.handle_add_set(key, raw_value_bytes).await,
             Command::SetRemove => self.handle_rem_set(key, raw_value_bytes).await,
             Command::GetSet => self.handle_get_set(key).await,
+            Command::SetRegister => self.handle_set_register(key, raw_value_bytes).await,
+            Command::GetRegister => self.handle_get_register(key).await,
+            Command::AppendRegister => self.handle_append_register(key, raw_value_bytes).await,
+            Command::GetRegisterLen => self.handle_get_len_register(key).await,
             Command::Unknown => {
                 println!("Unknown command received");
                 Ok(tonic::Response::new(PropagateDataResponse {
@@ -207,7 +257,7 @@ impl ReplicationService for ReplicationServer {
             Some(msg) => msg,
             None => return Ok(Response::new(GossipChangesResponse { success: false })),
         };
-        // let remote_counter = PNCounter::from(counter); //the actual PNCounter type
+        
         let remote_crdt = match crdt_data.data {
             Some(Data::PnCounter(wire)) => {
                 //convert Proto -> Domain
@@ -218,6 +268,10 @@ impl ReplicationService for ReplicationServer {
                 //same thing, convert Proto -> Domain
                 let domain_set = AWSet::from(wire);
                 CRDTValue::AWSet(domain_set)
+            }
+            Some(Data::LwwRegister(wire)) => {
+                let domain_register = LwwRegister::from(wire);
+                CRDTValue::LWWRegister(domain_register)
             }
             None => {
                 println!("Received CRDTData but the oneof field was empty");
@@ -287,6 +341,10 @@ impl ReplicationService for ReplicationServer {
                     let domain_set = AWSet::from(wire);
                     CRDTValue::AWSet(domain_set)
                 }
+                Some(Data::LwwRegister(wire)) => {
+                    let domain_register = LwwRegister::from(wire);
+                    CRDTValue::LWWRegister(domain_register)
+                }
                 None => {
                     println!("Received CRDTData but the oneof field was empty");
                     return Ok(Response::new(GossipBatchResponse { success: false }));
@@ -348,6 +406,7 @@ impl ReplicationServer {
         Ok(())
     }
 
+    //// COUNTER HELPER FUNCTIONS
     pub async fn handle_set_counter(
         &self,
         key: String,
@@ -508,6 +567,8 @@ impl ReplicationServer {
         }))
     }
 
+    
+    ////  SET HELPER FUNCTIONS
     pub async fn handle_add_set(
         &self,
         key: String,
@@ -625,6 +686,149 @@ impl ReplicationServer {
             response: Vec::new(),
         }))
     }
+    
+    
+    //// REGISTER HELPER FUNCTIONS
+    pub async fn handle_set_register(
+        &self,
+        key: String,
+        raw_value_bytes: Vec<u8>,
+    ) -> Result<tonic::Response<PropagateDataResponse>, tonic::Status> {
+        
+        let register_value = String::from_utf8(raw_value_bytes).map_err(|_| tonic::Status::invalid_argument("Invalid UTF-8 sequence for tag"))?;
+
+        println!("received valid RSET, to set register: {}", register_value);
+
+        let mut stored_val = self.store.entry(key.clone()).or_insert_with(|| {
+            let register = LwwRegister::new(self.config.node_id.clone());
+
+            println!("Register set!");
+
+            StoredValue {
+                data: CRDTValue::LWWRegister(register),
+                last_updated: SystemTime::now(),
+            }
+        });
+
+        match &mut stored_val.data {
+            CRDTValue::LWWRegister(reg) => {
+                reg.set(register_value, self.config.node_id.clone());
+
+                match self.push(key, CRDTValue::LWWRegister(reg.clone())).await {
+                    //propagate
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+
+                return Ok(Response::new(PropagateDataResponse {
+                    success: true,
+                    response: Vec::new(),
+                }));
+            }
+            _ => println!("type mismatch: key exisits, but value is not of type LWWRegister"),
+        }
+
+        Ok(Response::new(PropagateDataResponse {
+            success: false,
+            response: Vec::new(),
+        }))
+    }
+    
+    pub async fn handle_get_register (
+        &self,
+        key: String,
+    ) -> Result<tonic::Response<PropagateDataResponse>, tonic::Status> {
+        let stored_val = match self.store.get_mut(&key) {
+            Some(val) => val,
+            None => {
+                return Err(tonic::Status::not_found("The requested key was not found!"));
+            }
+        };
+        match &stored_val.data {
+            CRDTValue::LWWRegister(reg) => {
+                let response_bytes = reg.get().into_bytes();
+                return Ok(Response::new(PropagateDataResponse {
+                    success: true,
+                    response: response_bytes,
+                }));
+            }
+            _ => println!("type mismatch: key exisits, but value is not of type LWWRegister"),
+        }
+        Ok(Response::new(PropagateDataResponse {
+            success: false,
+            response: Vec::new(),
+        }))
+    }
+    
+    
+    pub async fn handle_append_register(
+        &self,
+        key: String,
+        raw_value_bytes: Vec<u8>,
+    ) -> Result<tonic::Response<PropagateDataResponse>, tonic::Status> {
+        
+        let register_value = String::from_utf8(raw_value_bytes).map_err(|_| tonic::Status::invalid_argument("Invalid UTF-8 sequence for tag"))?;
+
+        println!("received valid RAPP, to append register: {}", register_value);
+
+        let mut stored_val = match self.store.get_mut(&key) {
+            Some(val) => val,
+            None => {
+                return Err(tonic::Status::not_found("The requested key was not found!"));
+            }
+        };
+
+        match &mut stored_val.data {
+            CRDTValue::LWWRegister(reg) => {
+                reg.append(register_value, self.config.node_id.clone());
+
+                match self.push(key, CRDTValue::LWWRegister(reg.clone())).await {
+                    //propagate
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+                stored_val.last_updated = SystemTime::now();
+                
+                return Ok(Response::new(PropagateDataResponse {
+                    success: true,
+                    response: Vec::new(),
+                }));
+            }
+            _ => println!("type mismatch: key exisits, but value is not of type LWWRegister"),
+        }
+
+        Ok(Response::new(PropagateDataResponse {
+            success: false,
+            response: Vec::new(),
+        }))
+    }
+    
+    pub async fn handle_get_len_register (
+        &self,
+        key: String,
+    ) -> Result<tonic::Response<PropagateDataResponse>, tonic::Status> {
+        let stored_val = match self.store.get_mut(&key) {
+            Some(val) => val,
+            None => {
+                return Err(tonic::Status::not_found("The requested key was not found!"));
+            }
+        };
+        match &stored_val.data {
+            CRDTValue::LWWRegister(reg) => {
+                let response_bytes = reg.strlen().to_be_bytes().to_vec();
+                return Ok(Response::new(PropagateDataResponse {
+                    success: true,
+                    response: response_bytes,
+                }));
+            }
+            _ => println!("type mismatch: key exisits, but value is not of type LWWRegister"),
+        }
+        Ok(Response::new(PropagateDataResponse {
+            success: false,
+            response: Vec::new(),
+        }))
+    }
+
 
     pub async fn push(&self, key: String, value: CRDTValue) -> Result<()> {
         //send updates to k randomly chosen peers

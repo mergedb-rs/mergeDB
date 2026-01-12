@@ -7,7 +7,7 @@ The core library of Conflict-free Replicated Data Types (CRDTs) powering **Merge
 
 This crate provides the fundamental data structures that allow MergeDB nodes to diverge and converge automatically without a central coordinator. These types are designed to be state-based, eventually consistent, and partition-tolerant.
 
-## 📦 Included CRDTs
+## Included CRDTs
 
 ### 1. PN-Counter (Positive-Negative Counter)
 A distributed counter that supports both increment and decrement operations.
@@ -29,7 +29,7 @@ A simple register for storing string values (like keys in a standard KV store).
     1.  Higher logical clock wins.
     2.  **Tie-Breaker:** If clocks are equal, the lexicographically higher Node ID wins.
 
-## 🚀 Usage
+## Usage
 
 Add this to your `Cargo.toml`:
 
@@ -60,7 +60,7 @@ fn main() {
 }
 ```
 
-## 🧪 Testing & Coverage
+## Testing & Coverage
 This crate maintains a high standard of unit testing to ensure convergence properties (associativity, commutativity, and idempotence) are met.
 
 ### Running Tests
@@ -83,5 +83,5 @@ cargo tarpaulin -p mergedb-types --out Html
 
 This will generate a tarpaulin-report.html file that visualizes which lines of your CRDT logic are covered by tests.
 
-# 📄 License
+# License
 This project is licensed under the MIT License.

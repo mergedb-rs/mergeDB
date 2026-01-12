@@ -9,12 +9,12 @@ service ReplicationService {
 }
 
 message ProtoDot {
-    string node_id = 1;
-    uint64 counter = 2;
+  string node_id = 1;
+  uint64 counter = 2;
 }
 
 message ProtoDotSet {
-    repeated ProtoDot dots = 1;
+  repeated ProtoDot dots = 1;
 }
 
 message PNCounterMessage {
@@ -23,16 +23,28 @@ message PNCounterMessage {
 }
 
 message AWSetMessage {
-    uint64 clock = 1;
-    map<string, ProtoDotSet> add_tags = 2;
-    map<string, ProtoDotSet> remove_tags = 3;
+  uint64 clock = 1;
+  map<string, ProtoDotSet> add_tags = 2;
+  map<string, ProtoDotSet> remove_tags = 3;
 }
 
 message CRDTData {
-    oneof data {  //this is the enum data
-        PNCounterMessage pn_counter = 1;
-        AWSetMessage aw_set = 2;
-    }
+  oneof data { //this is the enum data
+    PNCounterMessage pn_counter = 1;
+    AWSetMessage aw_set = 2;
+    LWWRegisterMessage lww_register = 3;
+  }
+}
+
+message ProtoRegisterDot {
+  string node_id = 1;
+  uint64 counter = 2;
+  string register = 3;
+}
+
+message LWWRegisterMessage {
+  uint64 clock = 1;
+  ProtoRegisterDot register_state = 2;
 }
 
 message PropagateDataRequest {
