@@ -310,6 +310,20 @@ impl ReplicationService for ReplicationServer {
                             println!("Ignored redundant update for {}", key);
                         }
                     }
+                    
+                    (CRDTValue::LWWRegister(local_reg), CRDTValue::LWWRegister(remote_reg)) => {
+                        println!("inside the gossip condition 1");
+                        let old_state = local_reg.clone();
+
+                        local_reg.merge(&mut remote_reg.clone());
+
+                        if *local_reg != old_state {
+                            println!("Merged NEW update for {}", key);
+                            stored_value.last_updated = SystemTime::now();
+                        } else {
+                            println!("Ignored redundant update for {}", key);
+                        }
+                    }
 
                     _ => println!(
                         "type mismatch: key exisits, but value is not of type PNCounter or AWSet"
@@ -381,9 +395,24 @@ impl ReplicationService for ReplicationServer {
                             }
                         },
 
-                        _ => println!("type mismatch: key exisits, but value is not of type PNCounter or AWSet"),
+                        (CRDTValue::LWWRegister(local_reg), CRDTValue::LWWRegister(remote_reg)) => {
+                            println!("inside the gossip condition 2");
+                            let old_state = local_reg.clone();
+    
+                            local_reg.merge(&mut remote_reg.clone());
+    
+                            if *local_reg != old_state {
+                                println!("Merged NEW update for {}", key);
+                                stored_value.last_updated = SystemTime::now();
+                            } else {
+                                println!("Ignored redundant update for {}", key);
+                            }
+                            },
+    
+                        _ => println!(
+                            "type mismatch: key exisits, but value is not of type PNCounter or AWSet"
+                        ),
                     }
-
                     stored_value.last_updated = SystemTime::now()
                 })
                 .or_insert_with(|| StoredValue {
@@ -909,6 +938,29 @@ impl ReplicationServer {
                             Err(e) => println!("failed to send update to {}: {}", peer_addr, e),
                         }
                     }
+                    
+                    CRDTValue::LWWRegister(inner) => {
+                        let wire_counter = LwwRegisterMessage::from(inner.clone());
+                        let oneof_type = Data::LwwRegister(wire_counter);
+
+                        let crdt_data = CrdtData {
+                            data: Some(oneof_type),
+                        };
+
+                        let state = Request::new(GossipChangesRequest {
+                            key: key.clone(),
+                            counter: Some(crdt_data),
+                        });
+
+                        println!("connected to the peer with id: {}", peer_addr);
+                        match peer_client.gossip_changes(state).await {
+                            Ok(response) => {
+                                println!("Response from peer: {:?}", response.into_inner())
+                            }
+                            Err(e) => println!("failed to send update to {}: {}", peer_addr, e),
+                        }
+                    }
+                    
                     _ => print!("other types soon!"),
                 }
             }

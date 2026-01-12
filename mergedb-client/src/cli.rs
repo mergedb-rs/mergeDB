@@ -43,21 +43,42 @@ pub enum Commands {
         amount: i64,
     },
     
-    /// add to a set
+    /// Add to a set
     Sadd {
         key: String,
         tag: String,
     },
     
-    /// remove from a set
+    /// Remove from a set
     Srem {
         key: String,
         tag: String,
     },
     
-    /// get the set
+    /// Get the set
     Sget {
         key: String,
-    }
+    },
     
+    /// Set the register
+    Rset {
+        key: String,
+        register: String,
+    },
+    
+    /// Get the register
+    Rget {
+        key: String,
+    },
+    
+    /// Append to the register
+    Rapp {
+        key: String,
+        reg_append: String,
+    },
+    
+    /// Get register length
+    Rlen {
+        key: String,
+    },
 }

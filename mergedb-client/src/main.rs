@@ -31,6 +31,12 @@ impl ToBytes for String {
     }
 }
 
+impl ToBytes for usize {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_be_bytes().to_vec()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -74,6 +80,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             send_request::<String>(&mut client, "SGET", &key, None).await?;
         }
         
+        Some(Commands::Rset { key, register }) => {
+            send_request(&mut client, "RSET", &key, Some(register)).await?;
+        }
+        
+        Some(Commands::Rget { key }) => {
+            send_request::<String>(&mut client, "RGET", &key, None).await?;
+        }
+        
+        Some(Commands::Rapp { key, reg_append }) => {
+            send_request(&mut client, "RAPP", &key, Some(reg_append)).await?;
+        }
+        
+        Some(Commands::Rlen { key }) => {
+            send_request::<usize>(&mut client, "RLEN", &key, None).await?;
+        }
     }
 
     Ok(())
@@ -108,6 +129,17 @@ where
         let raw = inner.response;
         let val: Vec<String> = serde_json::from_slice(&raw).expect("failed to desrialise");
         println!("{}", format!(":: {:?}", val).cyan());
+    }else if cmd == "RGET" {
+        let raw = inner.response;
+        let val = match str::from_utf8(&raw) {
+            Ok(v) => v,
+            Err(_) => "failed to convert to utf8: {}",
+        };
+        println!("{}", format!(":: {:?}", val).cyan());
+    }else if cmd == "RLEN" {
+        let raw = inner.response;
+        let val = usize::from_be_bytes(raw.try_into().unwrap_or([0; 8]));
+        println!("{}", format!(":: {}", val).cyan());
     }
     else {
         println!("{}", "✓ OK".green());
@@ -138,6 +170,10 @@ async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::
                 println!("  SADD <key> <tag>");
                 println!("  SREM <key> <tag>");
                 println!("  SGET <key>");
+                println!("  RSET <key> <register>");
+                println!("  RGET <key>");
+                println!("  RAPP <key> <to_append>");
+                println!("  RLEN <key>");
                 println!("  EXIT");
             }
 
@@ -153,6 +189,14 @@ async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::
             "SGET" if parts.len() == 2 => {
                 let _ = send_request::<String>(&mut client, "SGET", parts[1], None).await;
             }
+            
+            "RGET" if parts.len() == 2 => {
+                let _ = send_request::<String>(&mut client, "RGET", parts[1], None).await;
+            }
+            
+            "RLEN" if parts.len() == 2 => {
+                let _ = send_request::<usize>(&mut client, "RLEN", parts[1], None).await;
+            }
 
             cmd @ ("CSET" | "CINC" | "CDEC") if parts.len() == 3 => {
                 if let Ok(val) = parts[2].parse::<i64>() {
@@ -163,6 +207,11 @@ async fn run_interactive(mut client: ReplicationServiceClient<tonic::transport::
             }
             
             cmd @ ("SADD" | "SREM") if parts.len() == 3 => {
+                let val = parts[2].to_string();
+                let _ = send_request(&mut client, cmd, parts[1], Some(val)).await;
+            }
+            
+            cmd @ ("RSET" | "RAPP") if parts.len() == 3 => {
                 let val = parts[2].to_string();
                 let _ = send_request(&mut client, cmd, parts[1], Some(val)).await;
             }
