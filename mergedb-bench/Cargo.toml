@@ -1,0 +1,12 @@
+[package]
+name = "mergedb-bench"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+criterion = "0.8.1"
+mergedb-types = { path = "../mergedb-types" }
+
+[[bench]]
+name = "micro_benchmarks"
+harness = false

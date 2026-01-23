@@ -1,4 +1,7 @@
 [workspace]
-members = ["mergedb-client", "mergedb-node", "mergedb-types"]
+members = ["mergedb-bench","mergedb-client", "mergedb-node", "mergedb-types"]
 
 resolver = "2"
+
+[profile.bench]
+debug = true     #needed for the profiler, so that the symbols are supplied to it
