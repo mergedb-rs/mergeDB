@@ -1,4 +1,5 @@
-target/
+target/*
 */.DS_Store
 .DS_Store
 *.log
+profile.json.gz

@@ -6,42 +6,82 @@ on:
   pull_request:
     branches: ["*"]
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
+    name: Run Unit Tests
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v6
 
       - name: Install Rust-toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install protoc
+      - name: Install Protoc
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - name: Verify protoc installation
+      - name: Verify Protoc Installation
         run: protoc --version
 
-      - name: Cache cargo registry
+      - name: Cache Cargo Registry
         uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Cache cargo index
+      - name: Cache Cargo Index
         uses: actions/cache@v4
         with:
-          path: ~/.cagro/git
+          path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Cache cargo build
+      - name: Cache Cargo Build
         uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run cargo test
+      - name: Run Cargo Test
         run: cargo test --all --verbose
+  
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    
+    #for github pages deployment
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+      
+      - name: Install Rust-toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Run Cargo Bench 
+        run: cargo bench -p mergedb-bench
+      
+      #upload html report
+      - name: Upload Benchmark Report
+        uses: actions/upload-artifact@v6
+        with:
+           name: criterion-report
+           path: target/criterion/
+           if-no-files-found: error
+        
+      #deploy report to pages(on main branch push)
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4.0.0
+        with: 
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/criterion/
+          destination_dir: bench
+      

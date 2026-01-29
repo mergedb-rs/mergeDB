@@ -3,6 +3,12 @@
 
 ---
 
+## Note
+
+To view the Criterion benchmarks: https://mergedb-rs.github.io/mergeDB/bench/report
+
+---
+
 ## Overview  
 `mergeDB` is a distributed **key-value store** that leverages **Conflict-free Replicated Data Types (CRDTs)** to ensure strong eventual consistency across nodes, without needing consensus protocols like Raft or Paxos.  
 
